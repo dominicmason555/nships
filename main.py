@@ -43,13 +43,15 @@ class MainWindow(QWidget):
                                                "source": "placing",
                                                "dest": "waiting"
                                            }, {
-                                               "trigger": "connect",
+                                               "trigger": "server_connect",
                                                "source": "disconnected",
-                                               "dest": "waiting"
+                                               "dest": "waiting",
+                                               "after": "on_connect"
                                            }, {
-                                               "trigger": "disconnect",
+                                               "trigger": "server_disconnect",
                                                "source": "*",
-                                               "dest": "disconnected"
+                                               "dest": "disconnected",
+                                               "after": "on_disconnect"
                                            }],
                                            auto_transitions=False,
                                            queued=True)
@@ -58,23 +60,60 @@ class MainWindow(QWidget):
 
         self.loop = asyncio.get_event_loop()
 
-        self.ui.connect_btn.clicked.connect(self.try_connect)
+        self.ui.connect_btn.clicked.connect(self.handle_connect_disconnect_btn)
         self.ui.input_edit.returnPressed.connect(self.handle_input)
         self.ui.execute_btn.clicked.connect(self.handle_input)
 
         self.pusher_client = pysherasync.PusherAsyncClient(self.APP_KEY, cluster=self.CLUSTER)
         self.client_task: Optional[asyncio.Task] = None
-        # self.client.task = asyncio.Task(self.run_pusher_client("game_1"))
+        self.connection_ready = asyncio.Event()
+        self.pusher_socket = None
         self.ui.show()
 
     @asyncClose
     async def closeEvent(self):
+        self.server_disconnect()
         self.client_task.cancel()
+        await asyncio.sleep(1)
         print("Shutting Down")
 
     @asyncSlot()
+    async def handle_connect_disconnect_btn(self):
+        if self.is_disconnected():
+            await self.try_connect()
+        else:
+            if self.client_task is not None:
+                self.client_task.cancel()
+                await self.pusher_socket.close()
+            self.server_disconnect()
+
     async def try_connect(self):
-        self.ui.output_edit.setHtml(f"Connecting...")
+        self.ui.output_edit.setHtml(f"Attempting connection...")
+        chan_name = self.ui.server_edit.text()
+        print(chan_name)
+        self.client_task = asyncio.Task(self.run_pusher_client(chan_name))
+        try:
+            await asyncio.wait_for(self.connection_ready.wait(), 5)
+            if self.pusher_socket is not None and self.pusher_socket.open:
+                self.server_connect()
+            else:
+                self.server_disconnect()
+        except asyncio.TimeoutError:
+            self.ui.output_edit.append("Connection attempt timed out")
+            print("Connection attempt timed out")
+            self.server_disconnect()
+        print(self.state)
+
+    def on_connect(self):
+        print("on_connect")
+        self.ui.output_edit.append("Connected")
+        self.ui.connect_btn.setText("Disconnect")
+
+    def on_disconnect(self):
+        print("on_disconnect")
+        self.connection_ready.clear()
+        self.ui.output_edit.append("Disconnected")
+        self.ui.connect_btn.setText("Connect")
 
     @asyncSlot()
     async def handle_input(self):
@@ -83,17 +122,17 @@ class MainWindow(QWidget):
         self.ui.input_edit.clear()
 
     async def run_pusher_client(self, chan_name: str):
-        pusher_socket = await self.pusher_client.connect()
-        status = await self.pusher_client.subscribe(channel_name=chan_name)
-        print(f"Subscription Status: {status}")
-        while True:
-            if not pusher_socket.open:
-                print("Connection reconnecting")
-                pusher_socket = await self.pusher_client.connect()
-                status = await self.pusher_client.subscribe(channel_name=chan_name)
-                print(f"Subscription Status: {status}")
+        print("Client Starting")
+        if self.pusher_socket is None or not self.pusher_socket.open:
+            print("Connecting...")
+            self.pusher_socket = await self.pusher_client.connect()
+            status = await self.pusher_client.subscribe(channel_name=chan_name)
+            print(f"Subscription Status: {status}")
+            if status["event"] == "pusher:connection_established":
+                self.connection_ready.set()
+        while self.pusher_socket.open:
             try:
-                msg = await pusher_socket.recv()
+                msg = await self.pusher_socket.recv()
                 msg = json.loads(msg)
                 if msg:
                     print(msg)
