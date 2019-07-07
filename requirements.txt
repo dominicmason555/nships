@@ -1,8 +1,6 @@
 pusher
 click
 pysherasync
-pynng
 asyncqt
-sniffio
 PySide2
-aiohttp
+transitions

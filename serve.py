@@ -11,9 +11,11 @@ pusher_client = pusher.Pusher(
 
 
 @click.command()
-@click.option("-m", "--message", prompt=True, help="The message to send", default="Test Message")
-def main(message):
-    pusher_client.trigger('my-channel', 'my-event', {'message': message})
+@click.option("-m", "--message", prompt=True, help="The message to send", default="Fired at (0,0)")
+@click.option("-c", "--channel", prompt=True, help="The channel to send to", default="game_1")
+@click.option("-e", "--event", prompt=True, help="The event name to trigger", default="fire")
+def main(message, channel, event):
+    pusher_client.trigger(channel, event, {'message': message})
 
 
 if __name__ == "__main__":
